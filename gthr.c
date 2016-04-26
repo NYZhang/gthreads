@@ -7,9 +7,10 @@
 
 // change 10. define RR time slice
 // unit is millisecond
-// depending on the complexity of instructions in f, a thread may not be swapped out
+// depending on the complexity of instructions in f, a thread may not be swapped
+// out
 // but changing TIME_SLICE to 0 will guarantee yielding to another thread
-double TIME_SLICE = 10.0;
+double TIME_SLICE = 0.0;
 
 enum {
   MaxGThreads = 4, // up to change, must be greater than 0
@@ -75,42 +76,51 @@ void __attribute__((noreturn)) gtret(int ret) {
 }
 
 bool gtyield(void) {
-  struct gt *p;
+  struct gt *p = 0;
   struct gtctx *old, *new;
 
   // change 6
   // decide the succeeding thread to execute
   if (current_policy == OTHER) {
+
     // find the ready thread with highest policy
-    unsigned short highest = 0;
+    unsigned short highest = 0;        // anything has a priority greater than 0
     struct gt *highestPtr = &gttbl[1]; // table size must be greater than 0!
     while (highestPtr != &gttbl[MaxGThreads]) {
       if (highestPtr->st == Ready && highestPtr->priority > highest) {
         p = highestPtr;
         highest = highestPtr->priority;
       }
-      highestPtr++;
+      ++highestPtr;
     }
-    if (! p) {
-        return false;
+    if (!p) {
+      return false;
     }
-      
   } else if (current_policy == FIFO) {
-    long long min = entrance_counter;
     struct gt *earliestPtr = &gttbl[1]; // table size must be greater than 0!
-    while (earliestPtr != &gttbl[MaxGThreads]) {
+    long long min = earliestPtr->thread_queue_entrance;
+    while (earliestPtr != &gttbl[MaxGThreads]) { // go through once
       if (earliestPtr->st == Ready &&
           earliestPtr->thread_queue_entrance < min) {
         p = earliestPtr;
         min = earliestPtr->thread_queue_entrance;
       }
-      earliestPtr++;
+      ++earliestPtr;
     }
-    if (! p) {
-        return false;
+    if (!p) {
+      return false;
     }
-  } else if (current_policy == RR) {
+    // increment entrance counter and
+    // set the succeeding thread to the highest so far
+    // setting p's thread_queue_entrance here instead of deciding where p is
+    // pointing is
+    // to satisfy transactional behavior because error happening during switch
+    // (assume there might be) will ruin p's chance to be scheduled properly,
+    // e.g.
+    // nondeterministically FILO...
+    p->thread_queue_entrance = ++entrance_counter;
 
+  } else if (current_policy == RR) {
     // sees the thread table as a circular buffer and always get the next ready
     // slot
     // uses the original code
@@ -123,12 +133,9 @@ bool gtyield(void) {
         return false;
       }
     }
+
   } else {
     assert(!"reachable");
-  }
-
-  if (p == gtcur) {
-    return false;
   }
 
   if (gtcur->st != Unused)
@@ -138,18 +145,6 @@ bool gtyield(void) {
   new = &p->ctx;
   gtcur = p;
   gtswtch(old, new);
-  if (current_policy == FIFO) {
-    // increment entrance counter and
-    // set the succeeding thread to the highest so far
-    // setting p's thread_queue_entrance here instead of deciding where p is
-    // pointing is
-    // to satisfy transactional behavior because error happening during switch
-    // (assume there might be) will ruin p's chance to be scheduled properly,
-    // e.g.
-    // nondeterministically FILO...
-    p->thread_queue_entrance = ++entrance_counter;
-  }
-
   return true;
 }
 
@@ -159,9 +154,6 @@ int gtgo(
     void (*f)(void),
     unsigned short prrty) // change 2. change signature of gtgo to pass priority
 {
-
-
-
   char *stack;
   struct gt *p;
 
@@ -180,20 +172,11 @@ int gtgo(
   p->ctx.rsp = (uint64_t)&stack[StackSize - 16];
   p->st = Ready;
   p->priority = prrty; // change 3. init the priority level of thread
-
-
-
   // change 9. track entry time if schedule policy if FIFO
-  
   if (current_policy == FIFO) {
-    p->thread_queue_entrance = ++entrance_counter;
-    printf("entrance number is %d\n", p->thread_queue_entrance);
-
+    p->thread_queue_entrance = entrance_counter++;
   } else {
     p->thread_queue_entrance = 0; // don't care in this case
-    if (current_policy == OTHER) {
-       printf("priority is %d\n", p->priority);
-    }
   }
 
   return 0;
@@ -218,9 +201,9 @@ void f(void) {
 }
 
 int main(void) {
-  //gtinit(OTHER);
-  //gtinit(RR);
-  //gtinit(FIFO);
+  // gtinit(OTHER);
+  // gtinit(RR);
+  gtinit(FIFO);
   gtgo(f, 1);
   gtgo(f, 10);
   gtgo(f, 80);
